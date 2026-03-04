@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const axios = require('axios');
+const cheerio = require('cheerio');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,82 +11,100 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '.')));
 
+// 블로그 방식: 유튜브 페이지에서 직접 메타데이터 추출
+async function getYouTubeMetadata(url) {
+    try {
+        const { data } = await axios.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            }
+        });
+        const $ = cheerio.load(data);
+        
+        // 블로그에서 언급한 ytInitialData 추출
+        let metadata = { title: 'Unknown Title' };
+        $('script').each((i, el) => {
+            const content = $(el).html();
+            if (content && content.includes('var ytInitialData =')) {
+                const jsonStr = content.split('var ytInitialData =')[1].split(';</script>')[0].trim();
+                try {
+                    const jsonData = JSON.parse(jsonStr);
+                    // 제목 추출 경로
+                    metadata.title = jsonData.contents.twoColumnWatchNextResults.results.results.contents[0].videoPrimaryInfoRenderer.title.runs[0].text;
+                } catch (e) {
+                    console.error('Metadata parse error:', e.message);
+                }
+            }
+        });
+        
+        // script 태그에서 못 찾으면 meta 태그에서 찾음
+        if (metadata.title === 'Unknown Title') {
+            metadata.title = $('meta[property="og:title"]').attr('content') || 'audio';
+        }
+        
+        return metadata;
+    } catch (err) {
+        console.error('Scraping error:', err.message);
+        return { title: 'audio' };
+    }
+}
+
 app.get('/download', async (req, res) => {
     try {
         const videoUrl = req.query.url;
-        const videoId = extractVideoId(videoUrl);
-
-        if (!videoId) {
-            return res.status(400).json({ success: false, message: '유효한 유튜브 링크를 입력해 주세요.' });
+        if (!videoUrl) {
+            return res.status(400).json({ success: false, message: 'URL이 필요합니다.' });
         }
 
-        console.log('--- Attempting YouTube MP36 API ---');
-        
-        // 1. YouTube MP36 API 호출 (가장 안정적인 무료 API)
-        const apiOptions = {
-            method: 'GET',
-            url: 'https://youtube-mp36.p.rapidapi.com/dl',
-            params: { id: videoId },
+        console.log('--- Start Processing ---');
+        console.log('Target URL:', videoUrl);
+
+        // 1. 메타데이터 추출 (블로그 핵심 로직 반영)
+        const metadata = await getYouTubeMetadata(videoUrl);
+        console.log('Scraped Title:', metadata.title);
+
+        // 2. Cobalt API 호출 (가장 안정적인 최신 우회 방식)
+        // 이 API는 별도의 키 없이도 공용 인스턴스를 통해 다운로드 링크를 제공합니다.
+        const cobaltOptions = {
+            method: 'POST',
+            url: 'https://api.cobalt.tools/api/json',
             headers: {
-                'x-rapidapi-key': process.env.RAPIDAPI_KEY || 'aa6f81d82bmshca7ee4461e2fdacp115c40jsn029b9cca4ebe',
-                'x-rapidapi-host': 'youtube-mp36.p.rapidapi.com'
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+            },
+            data: {
+                url: videoUrl,
+                downloadMode: 'audio', // 오디오만 추출
+                audioFormat: 'mp3',
+                audioBitrate: '128'
             }
         };
 
-        const apiResponse = await axios.request(apiOptions);
-        const data = apiResponse.data;
-
-        if (data.status === 'ok' && data.link) {
-            console.log('Success! Proxying file...');
-            
-            // 2. 서버 프록시 다운로드
-            const fileResponse = await axios({
-                method: 'get',
-                url: data.link,
-                responseType: 'stream',
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
-                },
-                timeout: 60000 // 60초로 넉넉하게 설정
+        const response = await axios.request(cobaltOptions);
+        
+        if (response.data && response.data.url) {
+            console.log('Cobalt Success! Link obtained.');
+            res.json({ 
+                success: true, 
+                link: response.data.url, 
+                title: metadata.title 
             });
-
-            const title = (data.title || 'audio').replace(/[^\w\s]/gi, '');
-            res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.mp3"`);
-            res.setHeader('Content-Type', 'audio/mpeg');
-
-            fileResponse.data.pipe(res);
-
-            fileResponse.data.on('error', (err) => {
-                console.error('Streaming Error:', err.message);
-                if (!res.headersSent) res.status(500).send('전송 중 오류가 발생했습니다.');
-            });
-
         } else {
-            console.error('API Response Status Not OK:', data);
-            res.status(500).json({ success: false, message: data.msg || 'API 서비스가 현재 불안정합니다. 다른 영상을 시도해 주세요.' });
+            console.error('Cobalt Error:', response.data);
+            res.status(500).json({ 
+                success: false, 
+                message: '다운로드 링크를 생성할 수 없습니다. (유튜브 차단)' 
+            });
         }
 
     } catch (err) {
-        console.error('Final Error Handler:', err.message);
-        let errorMsg = '변환 실패: 서버 혹은 API 오류입니다.';
-        
-        if (err.response?.status === 429) {
-            errorMsg = 'API 사용량이 초과되었습니다. 내일 다시 시도해 주세요.';
-        } else if (err.response?.data?.message) {
-            errorMsg = `API 오류: ${err.response.data.message}`;
-        }
-
-        if (!res.headersSent) {
-            res.status(500).json({ success: false, message: errorMsg });
-        }
+        console.error('Full Error:', err.response?.data || err.message);
+        res.status(500).json({ 
+            success: false, 
+            message: '서버 오류: ' + (err.response?.data?.text || err.message) 
+        });
     }
 });
-
-function extractVideoId(url) {
-    const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
-    const match = url.match(regExp);
-    return (match && match[7].length == 11) ? match[7] : false;
-}
 
 app.listen(PORT, () => {
     console.log(`Server is running at http://localhost:${PORT}`);
