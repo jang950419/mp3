@@ -19,7 +19,7 @@ const cookieStr = process.env.YOUTUBE_COOKIE;
 if (cookieStr) {
     try {
         fs.writeFileSync(COOKIE_FILE, cookieStr.trim());
-        console.log('Cookie file created.');
+        console.log('Cookie file updated.');
     } catch (e) {
         console.error('Failed to create cookie file:', e.message);
     }
@@ -27,49 +27,66 @@ if (cookieStr) {
 
 app.get('/download', async (req, res) => {
     try {
-        let url = req.query.url;
-        console.log('Processing:', url);
+        let originalUrl = req.query.url;
+        console.log('Requested URL:', originalUrl);
 
-        // 1. 영상 메타데이터 가져오기
-        const metadataOptions = {
-            dumpSingleJson: true,
+        // 1. URL 정문화 (비디오 ID만 추출)
+        let videoId;
+        try {
+            if (originalUrl.includes('v=')) {
+                videoId = originalUrl.split('v=')[1].split('&')[0];
+            } else if (originalUrl.includes('youtu.be/')) {
+                videoId = originalUrl.split('youtu.be/')[1].split('?')[0];
+            }
+            if (!videoId) throw new Error('Invalid ID');
+        } catch (e) {
+            return res.status(400).send('유효하지 않은 유튜브 링크입니다.');
+        }
+        const url = `https://www.youtube.com/watch?v=${videoId}`;
+
+        // 2. 공통 옵션 설정 (차단 우회 핵심)
+        const commonArgs = {
             noPlaylist: true,
             noWarnings: true,
+            noCheckCertificates: true,
+            preferFreeFormats: true,
+            youtubeSkipDashManifest: true,
+            referer: 'https://www.youtube.com/',
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
         };
-        if (fs.existsSync(COOKIE_FILE)) metadataOptions.cookies = COOKIE_FILE;
+        if (fs.existsSync(COOKIE_FILE)) commonArgs.cookies = COOKIE_FILE;
 
-        const metadata = await ytDlp(url, metadataOptions);
+        // 3. 메타데이터 가져오기
+        console.log('Fetching metadata for:', videoId);
+        const metadata = await ytDlp(url, {
+            ...commonArgs,
+            dumpSingleJson: true,
+        });
+
         const title = metadata.title.replace(/[^\w\s]/gi, '') || 'audio';
-        console.log('Video title:', title);
+        console.log('Starting conversion for:', title);
 
-        // 2. 헤더 설정
+        // 4. 헤더 및 응답 설정
         res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.mp3"`);
         res.header('Content-Type', 'audio/mpeg');
 
-        // 3. 변환 및 스트리밍 다운로드
-        const downloadOptions = {
+        // 5. 다운로드 및 변환 스트리밍
+        const subprocess = ytDlp.exec(url, {
+            ...commonArgs,
             extractAudio: true,
             audioFormat: 'mp3',
-            ffmpegLocation: ffmpegPath, // FFmpeg 경로 지정 (중요)
-            output: '-', // stdout으로 출력
-            noPlaylist: true,
-            noWarnings: true,
-            format: 'bestaudio/best', // 최상의 오디오 품질 선택
-        };
-        if (fs.existsSync(COOKIE_FILE)) downloadOptions.cookies = COOKIE_FILE;
-
-        const subprocess = ytDlp.exec(url, downloadOptions);
-
-        // 에러 처리
-        subprocess.on('error', (err) => {
-            console.error('Subprocess Error:', err);
-            if (!res.headersSent) res.status(500).send('Streaming failed.');
+            ffmpegLocation: ffmpegPath,
+            output: '-',
+            format: 'bestaudio/best'
         });
 
-        // 클라이언트(브라우저)로 데이터 전송
         subprocess.stdout.pipe(res);
 
-        // 클라이언트가 연결을 끊으면 프로세스 강제 종료
+        subprocess.on('error', (err) => {
+            console.error('Subprocess Error:', err);
+            if (!res.headersSent) res.status(500).send('변환 중 오류 발생');
+        });
+
         req.on('close', () => {
             if (subprocess) subprocess.kill();
         });
@@ -77,8 +94,10 @@ app.get('/download', async (req, res) => {
     } catch (err) {
         console.error('Download Failure:', err);
         let errorMsg = err.message;
-        if (errorMsg.includes('confirm you’re not a bot')) {
-            errorMsg = '유튜브 보안 시스템에 의해 차단되었습니다. 쿠키를 새로 갱신해 보세요.';
+        if (errorMsg.includes('Sign in to confirm')) {
+            errorMsg = '유튜브 봇 감지에 차단되었습니다. 최신 쿠키로 갱신이 필요합니다.';
+        } else if (errorMsg.includes('format is not available')) {
+            errorMsg = '이 영상은 현재 서버에서 추출할 수 없는 형식입니다.';
         }
         res.status(500).send(`변환 실패: ${errorMsg}`);
     }
