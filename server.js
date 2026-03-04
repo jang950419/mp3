@@ -6,8 +6,22 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 유튜버 차단 우회를 위한 에이전트 생성
-const agent = ytdl.createAgent();
+// 환경 변수에서 쿠키를 가져와 에이전트 생성
+let agent;
+const cookieStr = process.env.YOUTUBE_COOKIE;
+
+if (cookieStr) {
+    try {
+        const cookies = JSON.parse(cookieStr);
+        agent = ytdl.createAgent(cookies);
+        console.log('Using YouTube cookies from environment variable.');
+    } catch (e) {
+        console.error('Failed to parse YOUTUBE_COOKIE:', e.message);
+        agent = ytdl.createAgent();
+    }
+} else {
+    agent = ytdl.createAgent();
+}
 
 app.use(cors());
 app.use(express.json());
@@ -22,13 +36,11 @@ app.get('/download', async (req, res) => {
             return res.status(400).send('Invalid YouTube URL');
         }
 
-        // 유튜버 차단 우회를 위한 옵션 추가
         const info = await ytdl.getInfo(url, {
             agent,
             requestOptions: {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
                 }
             }
         });
