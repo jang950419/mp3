@@ -30,7 +30,6 @@ app.get('/download', async (req, res) => {
         let originalUrl = req.query.url;
         console.log('Requested URL:', originalUrl);
 
-        // 1. URL 정문화 (비디오 ID만 추출)
         let videoId;
         try {
             if (originalUrl.includes('v=')) {
@@ -44,19 +43,19 @@ app.get('/download', async (req, res) => {
         }
         const url = `https://www.youtube.com/watch?v=${videoId}`;
 
-        // 2. 공통 옵션 설정 (차단 우회 핵심)
+        // 차단 우회를 위한 초강력 옵션
         const commonArgs = {
             noPlaylist: true,
             noWarnings: true,
             noCheckCertificates: true,
-            preferFreeFormats: true,
             youtubeSkipDashManifest: true,
+            // 클라이언트 속이기: 안드로이드와 웹 플레이어를 동시에 시뮬레이션
+            extractorArgs: 'youtube:player_client=android,web',
             referer: 'https://www.youtube.com/',
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            userAgent: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36'
         };
         if (fs.existsSync(COOKIE_FILE)) commonArgs.cookies = COOKIE_FILE;
 
-        // 3. 메타데이터 가져오기
         console.log('Fetching metadata for:', videoId);
         const metadata = await ytDlp(url, {
             ...commonArgs,
@@ -66,17 +65,17 @@ app.get('/download', async (req, res) => {
         const title = metadata.title.replace(/[^\w\s]/gi, '') || 'audio';
         console.log('Starting conversion for:', title);
 
-        // 4. 헤더 및 응답 설정
         res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.mp3"`);
         res.header('Content-Type', 'audio/mpeg');
 
-        // 5. 다운로드 및 변환 스트리밍
+        // 다운로드 시 포맷 선택을 극도로 유연하게 변경
         const subprocess = ytDlp.exec(url, {
             ...commonArgs,
             extractAudio: true,
             audioFormat: 'mp3',
             ffmpegLocation: ffmpegPath,
             output: '-',
+            // 가장 넓은 범위의 오디오 포맷 허용
             format: 'bestaudio/best'
         });
 
@@ -95,9 +94,9 @@ app.get('/download', async (req, res) => {
         console.error('Download Failure:', err);
         let errorMsg = err.message;
         if (errorMsg.includes('Sign in to confirm')) {
-            errorMsg = '유튜브 봇 감지에 차단되었습니다. 최신 쿠키로 갱신이 필요합니다.';
+            errorMsg = '유튜브 봇 감지에 차단되었습니다. 최신 쿠키로 갱신하거나 잠시 후 시도해 주세요.';
         } else if (errorMsg.includes('format is not available')) {
-            errorMsg = '이 영상은 현재 서버에서 추출할 수 없는 형식입니다.';
+            errorMsg = '유튜브가 서버의 접근을 제한하여 오디오 데이터를 보내주지 않고 있습니다.';
         }
         res.status(500).send(`변환 실패: ${errorMsg}`);
     }
