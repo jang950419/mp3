@@ -13,23 +13,36 @@ app.use(express.static(path.join(__dirname, '.')));
 app.get('/download', async (req, res) => {
     try {
         const url = req.query.url;
+        console.log('Download requested for:', url);
+
         if (!ytdl.validateURL(url)) {
+            console.error('Invalid URL:', url);
             return res.status(400).send('Invalid YouTube URL');
         }
 
         const info = await ytdl.getInfo(url);
         const title = info.videoDetails.title.replace(/[^\w\s]/gi, ''); // Clean title
+        console.log('Video title:', title);
 
         res.header('Content-Disposition', `attachment; filename="${title}.mp3"`);
-        ytdl(url, {
+        
+        const stream = ytdl(url, {
             filter: 'audioonly',
             quality: 'highestaudio',
-            format: 'mp3'
-        }).pipe(res);
+        });
+
+        stream.on('error', (err) => {
+            console.error('YTDL Stream Error:', err);
+            if (!res.headersSent) {
+                res.status(500).send('Streaming error occurred');
+            }
+        });
+
+        stream.pipe(res);
 
     } catch (err) {
-        console.error(err);
-        res.status(500).send('An error occurred');
+        console.error('Full Server Error:', err);
+        res.status(500).send(`An error occurred: ${err.message}`);
     }
 });
 
