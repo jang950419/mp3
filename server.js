@@ -17,10 +17,10 @@ app.get('/download', async (req, res) => {
             return res.status(400).send('URL이 필요합니다.');
         }
 
-        console.log('API Request (YouTube to MP315 POST) for:', videoUrl);
+        console.log('API Request (YouTube to MP315) for:', videoUrl);
 
-        // 사용자가 제공한 curl 정보를 바탕으로 POST 요청 구성
-        const options = {
+        // 1. API 호출하여 다운로드 링크 확보
+        const apiOptions = {
             method: 'POST',
             url: 'https://youtube-to-mp315.p.rapidapi.com/download',
             params: {
@@ -35,22 +35,43 @@ app.get('/download', async (req, res) => {
             data: {}
         };
 
-        const response = await axios.request(options);
-        
-        // API 응답 데이터 확인 (보통 downloadUrl 또는 link 필드에 주소가 담깁니다)
-        if (response.data && (response.data.downloadUrl || response.data.link)) {
-            const downloadLink = response.data.downloadUrl || response.data.link;
-            console.log('API Success! Redirecting to:', downloadLink);
-            res.redirect(downloadLink);
-        } else {
-            console.error('API Response Detail:', response.data);
-            res.status(500).send('변환 실패: API가 다운로드 링크를 제공하지 않았습니다.');
+        const apiResponse = await axios.request(apiOptions);
+        const downloadLink = apiResponse.data.downloadUrl || apiResponse.data.link;
+
+        if (!downloadLink) {
+            console.error('No download link in API response:', apiResponse.data);
+            return res.status(500).send('변환 실패: API가 다운로드 링크를 제공하지 않았습니다.');
         }
+
+        console.log('API Success! Proxying file from:', downloadLink);
+
+        // 2. 서버가 직접 파일을 스트리밍하여 사용자에게 전달 (프록시 방식)
+        const fileResponse = await axios({
+            method: 'get',
+            url: downloadLink,
+            responseType: 'stream'
+        });
+
+        // 파일 이름 설정 (API에서 주면 사용, 없으면 기본값)
+        const title = apiResponse.data.title ? apiResponse.data.title.replace(/[^\w\s]/gi, '') : 'download';
+        
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.mp3"`);
+        res.setHeader('Content-Type', 'audio/mpeg');
+
+        // 파일 데이터를 브라우저로 직접 파이핑
+        fileResponse.data.pipe(res);
+
+        fileResponse.data.on('error', (err) => {
+            console.error('Stream Error:', err.message);
+            if (!res.headersSent) res.status(500).send('파일 전송 중 오류 발생');
+        });
 
     } catch (err) {
         console.error('Full Server Error:', err.message);
         const errorDetail = err.response?.data?.message || err.message;
-        res.status(500).send('서버 오류: ' + errorDetail);
+        if (!res.headersSent) {
+            res.status(500).send('서버 오류: ' + errorDetail);
+        }
     }
 });
 
