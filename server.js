@@ -6,6 +6,27 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Netscape 쿠키 형식을 JSON 객체 배열로 변환하는 함수
+function parseNetscapeCookies(cookieStr) {
+    const cookies = [];
+    const lines = cookieStr.split('\n');
+    for (let line of lines) {
+        line = line.trim();
+        if (!line || line.startsWith('#')) continue;
+        const parts = line.split('\t');
+        if (parts.length < 7) continue;
+        cookies.push({
+            domain: parts[0],
+            path: parts[2],
+            secure: parts[3].toUpperCase() === 'TRUE',
+            expirationDate: parseInt(parts[4]),
+            name: parts[5],
+            value: parts[6]
+        });
+    }
+    return cookies;
+}
+
 // 환경 변수에서 쿠키를 가져와 에이전트 생성
 let agent;
 const cookieStr = process.env.YOUTUBE_COOKIE;
@@ -13,18 +34,26 @@ const cookieStr = process.env.YOUTUBE_COOKIE;
 console.log('--- Server Startup ---');
 if (cookieStr) {
     try {
-        const cookies = JSON.parse(cookieStr);
-        if (Array.isArray(cookies)) {
+        let cookies;
+        if (cookieStr.trim().startsWith('[') || cookieStr.trim().startsWith('{')) {
+            // JSON 형식인 경우
+            cookies = JSON.parse(cookieStr);
+            console.log('Detected JSON cookie format.');
+        } else if (cookieStr.includes('\t')) {
+            // Netscape 형식인 경우
+            cookies = parseNetscapeCookies(cookieStr);
+            console.log('Detected Netscape cookie format.');
+        }
+
+        if (Array.isArray(cookies) && cookies.length > 0) {
             agent = ytdl.createAgent(cookies);
-            console.log('Successfully loaded YouTube cookies (Array format). Count:', cookies.length);
+            console.log('Successfully loaded YouTube cookies. Count:', cookies.length);
         } else {
-            console.error('YOUTUBE_COOKIE is not an array. Please check the format.');
+            console.error('No valid cookies found in YOUTUBE_COOKIE.');
             agent = ytdl.createAgent();
         }
     } catch (e) {
-        console.error('Failed to parse YOUTUBE_COOKIE JSON:', e.message);
-        // 쿠키 문자열 앞부분만 출력하여 형식 확인 (보안 위해 일부만)
-        console.log('Cookie string starts with:', cookieStr.substring(0, 20) + '...');
+        console.error('Failed to parse YOUTUBE_COOKIE:', e.message);
         agent = ytdl.createAgent();
     }
 } else {
@@ -77,10 +106,9 @@ app.get('/download', async (req, res) => {
 
     } catch (err) {
         console.error('Full Server Error:', err);
-        // 에러 메시지에 더 자세한 내용 포함
         let errorMsg = err.message;
         if (errorMsg.includes('confirm you’re not a bot')) {
-            errorMsg = '유튜브의 봇 감지에 차단되었습니다. 쿠키 설정이 올바른지 확인해 주세요.';
+            errorMsg = '유튜브의 봇 감지에 차단되었습니다. 쿠키가 만료되었거나 올바르지 않습니다.';
         }
         res.status(500).send(`변환 실패: ${errorMsg}`);
     }
