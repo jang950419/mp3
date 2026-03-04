@@ -36,11 +36,9 @@ if (cookieStr) {
     try {
         let cookies;
         if (cookieStr.trim().startsWith('[') || cookieStr.trim().startsWith('{')) {
-            // JSON 형식인 경우
             cookies = JSON.parse(cookieStr);
             console.log('Detected JSON cookie format.');
         } else if (cookieStr.includes('\t')) {
-            // Netscape 형식인 경우
             cookies = parseNetscapeCookies(cookieStr);
             console.log('Detected Netscape cookie format.');
         }
@@ -75,13 +73,9 @@ app.get('/download', async (req, res) => {
             return res.status(400).send('Invalid YouTube URL');
         }
 
+        // 영상 정보를 가져올 때 옵션 강화
         const info = await ytdl.getInfo(url, {
             agent,
-            requestOptions: {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                }
-            }
         });
 
         const title = info.videoDetails.title.replace(/[^\w\s]/gi, '');
@@ -89,9 +83,10 @@ app.get('/download', async (req, res) => {
 
         res.header('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.mp3"`);
         
+        // 필터를 'audioonly'에서 더 넓게 확장하거나 품질 설정을 변경
         const stream = ytdl.downloadFromInfo(info, {
-            filter: 'audioonly',
             quality: 'highestaudio',
+            filter: format => format.container === 'mp4' && !format.hasVideo || format.audioBitrate > 0,
             agent
         });
 
@@ -109,6 +104,8 @@ app.get('/download', async (req, res) => {
         let errorMsg = err.message;
         if (errorMsg.includes('confirm you’re not a bot')) {
             errorMsg = '유튜브의 봇 감지에 차단되었습니다. 쿠키가 만료되었거나 올바르지 않습니다.';
+        } else if (errorMsg.includes('playable formats')) {
+            errorMsg = '재생 가능한 오디오 형식을 찾을 수 없습니다. 다른 영상으로 시도해 주세요.';
         }
         res.status(500).send(`변환 실패: ${errorMsg}`);
     }
