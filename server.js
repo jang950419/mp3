@@ -13,48 +13,66 @@ app.use(express.static(path.join(__dirname, '.')));
 app.get('/download', async (req, res) => {
     try {
         const videoUrl = req.query.url;
-        const videoId = extractVideoId(videoUrl);
-
-        if (!videoId) {
-            return res.status(400).send('유효한 유튜브 ID를 찾을 수 없습니다.');
+        if (!videoUrl) {
+            return res.status(400).json({ success: false, message: '유튜브 링크를 입력해 주세요.' });
         }
 
-        console.log('API Request (YouTube MP36) for ID:', videoId);
+        console.log('--- New Download Request ---');
+        console.log('Target URL:', videoUrl);
 
-        // 가장 안정적인 YouTube MP36 API 사용
+        // 사용자가 제공한 API (YouTube to MP315)로 다시 시도
         const options = {
-            method: 'GET',
-            url: 'https://youtube-mp36.p.rapidapi.com/dl',
-            params: { id: videoId },
+            method: 'POST',
+            url: 'https://youtube-to-mp315.p.rapidapi.com/download',
+            params: {
+                url: videoUrl,
+                format: 'mp3'
+            },
             headers: {
-                'x-rapidapi-key': process.env.RAPIDAPI_KEY || 'aa6f81d82bmshca7ee4461e2fdacp115c40jsn029b9cca4ebe',
-                'x-rapidapi-host': 'youtube-mp36.p.rapidapi.com'
-            }
+                'Content-Type': 'application/json',
+                'x-rapidapi-host': 'youtube-to-mp315.p.rapidapi.com',
+                'x-rapidapi-key': process.env.RAPIDAPI_KEY || 'aa6f81d82bmshca7ee4461e2fdacp115c40jsn029b9cca4ebe'
+            },
+            data: {}
         };
 
         const response = await axios.request(options);
+        console.log('API Response:', response.data);
+
+        // API마다 응답 필드명이 다를 수 있어 여러 케이스 대응
+        const downloadLink = response.data.downloadUrl || response.data.link || response.data.url;
         
-        // API 응답 확인
-        if (response.data && response.data.status === 'ok') {
-            console.log('API Success! Returning link:', response.data.link);
-            // 브라우저에서 직접 다운로드하도록 JSON으로 링크 전달 (프론트에서 처리)
-            res.json({ success: true, link: response.data.link, title: response.data.title });
+        if (downloadLink) {
+            console.log('Success! Link found:', downloadLink);
+            res.json({ 
+                success: true, 
+                link: downloadLink, 
+                title: response.data.title || 'audio' 
+            });
         } else {
-            console.error('API Error Response:', response.data);
-            res.status(500).json({ success: false, message: response.data.msg || 'API 처리 오류' });
+            console.error('No link found in response');
+            res.status(500).json({ 
+                success: false, 
+                message: 'API가 다운로드 링크를 생성하지 못했습니다. (다른 영상을 시도해 보세요)' 
+            });
         }
 
     } catch (err) {
-        console.error('Full Server Error:', err.message);
-        res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+        console.error('Detailed Server Error:', err.response?.data || err.message);
+        
+        // 구체적인 에러 메시지 전달
+        let errorMsg = '서버 오류가 발생했습니다.';
+        if (err.response?.status === 401 || err.response?.status === 403) {
+            errorMsg = 'API 키가 올바르지 않거나 사용량이 초과되었습니다.';
+        } else if (err.response?.status === 404) {
+            errorMsg = 'API 서버에서 영상을 찾을 수 없습니다.';
+        } else if (err.message) {
+            errorMsg = `오류 발생: ${err.message}`;
+        }
+
+        res.status(500).json({ success: false, message: errorMsg });
     }
 });
-
-function extractVideoId(url) {
-    const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
-    const match = url.match(regExp);
-    return (match && match[7].length == 11) ? match[7] : false;
-}
 
 app.listen(PORT, () => {
     console.log(`Server is running at http://localhost:${PORT}`);
