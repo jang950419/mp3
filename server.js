@@ -17,32 +17,40 @@ app.get('/download', async (req, res) => {
             return res.status(400).send('URL이 필요합니다.');
         }
 
-        console.log('API Request (YouTube to MP315) for:', videoUrl);
+        console.log('API Request (YouTube to MP315 POST) for:', videoUrl);
 
+        // 사용자가 제공한 curl 정보를 바탕으로 POST 요청 구성
         const options = {
-            method: 'GET',
+            method: 'POST',
             url: 'https://youtube-to-mp315.p.rapidapi.com/download',
-            params: { url: videoUrl },
+            params: {
+                url: videoUrl,
+                format: 'mp3'
+            },
             headers: {
-                'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
-                'X-RapidAPI-Host': 'youtube-to-mp315.p.rapidapi.com'
-            }
+                'Content-Type': 'application/json',
+                'x-rapidapi-host': 'youtube-to-mp315.p.rapidapi.com',
+                'x-rapidapi-key': process.env.RAPIDAPI_KEY || 'aa6f81d82bmshca7ee4461e2fdacp115c40jsn029b9cca4ebe'
+            },
+            data: {}
         };
 
         const response = await axios.request(options);
         
-        // YouTube to MP315 API의 응답 구조에 맞게 수정
-        if (response.data && response.data.downloadUrl) {
-            console.log('API Success! Redirecting to download link.');
-            res.redirect(response.data.downloadUrl);
+        // API 응답 데이터 확인 (보통 downloadUrl 또는 link 필드에 주소가 담깁니다)
+        if (response.data && (response.data.downloadUrl || response.data.link)) {
+            const downloadLink = response.data.downloadUrl || response.data.link;
+            console.log('API Success! Redirecting to:', downloadLink);
+            res.redirect(downloadLink);
         } else {
-            console.error('API Response Format Error:', response.data);
-            res.status(500).send('변환 실패: API 응답 형식이 올바르지 않습니다.');
+            console.error('API Response Detail:', response.data);
+            res.status(500).send('변환 실패: API가 다운로드 링크를 제공하지 않았습니다.');
         }
 
     } catch (err) {
         console.error('Full Server Error:', err.message);
-        res.status(500).send('서버 오류: ' + (err.response?.data?.message || err.message));
+        const errorDetail = err.response?.data?.message || err.message;
+        res.status(500).send('서버 오류: ' + errorDetail);
     }
 });
 
