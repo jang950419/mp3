@@ -13,67 +13,48 @@ app.use(express.static(path.join(__dirname, '.')));
 app.get('/download', async (req, res) => {
     try {
         const videoUrl = req.query.url;
-        if (!videoUrl) {
-            return res.status(400).send('URL이 필요합니다.');
+        const videoId = extractVideoId(videoUrl);
+
+        if (!videoId) {
+            return res.status(400).send('유효한 유튜브 ID를 찾을 수 없습니다.');
         }
 
-        console.log('API Request (YouTube to MP315) for:', videoUrl);
+        console.log('API Request (YouTube MP36) for ID:', videoId);
 
-        // 1. API 호출하여 다운로드 링크 확보
-        const apiOptions = {
-            method: 'POST',
-            url: 'https://youtube-to-mp315.p.rapidapi.com/download',
-            params: {
-                url: videoUrl,
-                format: 'mp3'
-            },
+        // 가장 안정적인 YouTube MP36 API 사용
+        const options = {
+            method: 'GET',
+            url: 'https://youtube-mp36.p.rapidapi.com/dl',
+            params: { id: videoId },
             headers: {
-                'Content-Type': 'application/json',
-                'x-rapidapi-host': 'youtube-to-mp315.p.rapidapi.com',
-                'x-rapidapi-key': process.env.RAPIDAPI_KEY || 'aa6f81d82bmshca7ee4461e2fdacp115c40jsn029b9cca4ebe'
-            },
-            data: {}
+                'x-rapidapi-key': process.env.RAPIDAPI_KEY || 'aa6f81d82bmshca7ee4461e2fdacp115c40jsn029b9cca4ebe',
+                'x-rapidapi-host': 'youtube-mp36.p.rapidapi.com'
+            }
         };
 
-        const apiResponse = await axios.request(apiOptions);
-        const downloadLink = apiResponse.data.downloadUrl || apiResponse.data.link;
-
-        if (!downloadLink) {
-            console.error('No download link in API response:', apiResponse.data);
-            return res.status(500).send('변환 실패: API가 다운로드 링크를 제공하지 않았습니다.');
-        }
-
-        console.log('API Success! Proxying file from:', downloadLink);
-
-        // 2. 서버가 직접 파일을 스트리밍하여 사용자에게 전달 (프록시 방식)
-        const fileResponse = await axios({
-            method: 'get',
-            url: downloadLink,
-            responseType: 'stream'
-        });
-
-        // 파일 이름 설정 (API에서 주면 사용, 없으면 기본값)
-        const title = apiResponse.data.title ? apiResponse.data.title.replace(/[^\w\s]/gi, '') : 'download';
+        const response = await axios.request(options);
         
-        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(title)}.mp3"`);
-        res.setHeader('Content-Type', 'audio/mpeg');
-
-        // 파일 데이터를 브라우저로 직접 파이핑
-        fileResponse.data.pipe(res);
-
-        fileResponse.data.on('error', (err) => {
-            console.error('Stream Error:', err.message);
-            if (!res.headersSent) res.status(500).send('파일 전송 중 오류 발생');
-        });
+        // API 응답 확인
+        if (response.data && response.data.status === 'ok') {
+            console.log('API Success! Returning link:', response.data.link);
+            // 브라우저에서 직접 다운로드하도록 JSON으로 링크 전달 (프론트에서 처리)
+            res.json({ success: true, link: response.data.link, title: response.data.title });
+        } else {
+            console.error('API Error Response:', response.data);
+            res.status(500).json({ success: false, message: response.data.msg || 'API 처리 오류' });
+        }
 
     } catch (err) {
         console.error('Full Server Error:', err.message);
-        const errorDetail = err.response?.data?.message || err.message;
-        if (!res.headersSent) {
-            res.status(500).send('서버 오류: ' + errorDetail);
-        }
+        res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
     }
 });
+
+function extractVideoId(url) {
+    const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[7].length == 11) ? match[7] : false;
+}
 
 app.listen(PORT, () => {
     console.log(`Server is running at http://localhost:${PORT}`);
