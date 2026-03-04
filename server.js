@@ -17,41 +17,34 @@ app.get('/download', async (req, res) => {
             return res.status(400).send('URL이 필요합니다.');
         }
 
-        console.log('API Request for:', videoUrl);
+        console.log('API Request (YouTube to MP315) for:', videoUrl);
 
         const options = {
             method: 'GET',
-            url: 'https://youtube-mp36.p.rapidapi.com/dl',
-            params: { id: extractVideoId(videoUrl) },
+            url: 'https://youtube-to-mp315.p.rapidapi.com/download',
+            params: { url: videoUrl },
             headers: {
                 'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
-                'X-RapidAPI-Host': 'youtube-mp36.p.rapidapi.com'
+                'X-RapidAPI-Host': 'youtube-to-mp315.p.rapidapi.com'
             }
         };
 
         const response = await axios.request(options);
         
-        if (response.data.status === 'ok') {
-            console.log('API Success! Redirecting to:', response.data.link);
-            // API가 준 실제 MP3 파일 주소로 리다이렉트 (사용자 브라우저에서 다운로드 시작)
-            res.redirect(response.data.link);
+        // YouTube to MP315 API의 응답 구조에 맞게 수정
+        if (response.data && response.data.downloadUrl) {
+            console.log('API Success! Redirecting to download link.');
+            res.redirect(response.data.downloadUrl);
         } else {
-            console.error('API Error Response:', response.data);
-            res.status(500).send('변환 실패: ' + (response.data.msg || '알 수 없는 오류'));
+            console.error('API Response Format Error:', response.data);
+            res.status(500).send('변환 실패: API 응답 형식이 올바르지 않습니다.');
         }
 
     } catch (err) {
         console.error('Full Server Error:', err.message);
-        res.status(500).send('서버 오류: ' + err.message);
+        res.status(500).send('서버 오류: ' + (err.response?.data?.message || err.message));
     }
 });
-
-// 유튜브 URL에서 비디오 ID만 추출하는 함수
-function extractVideoId(url) {
-    const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
-    const match = url.match(regExp);
-    return (match && match[7].length == 11) ? match[7] : false;
-}
 
 app.listen(PORT, () => {
     console.log(`Server is running at http://localhost:${PORT}`);
